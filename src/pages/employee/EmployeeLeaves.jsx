@@ -73,14 +73,55 @@ const EmployeeLeaves = () => {
 
     useEffect(() => { fetchLeaveData(); }, []);
 
-    // Afternoon checks
-    const isAfternoon = (dateStr) => {
+    // Second-half boundary: use shift config (default 13:00 = 1 PM)
+    // This matches app.shift.second-half-start-time in application.properties
+    const SECOND_HALF_HOUR = 13; // 1:00 PM
+
+    const isAfterSecondHalf = (dateStr) => {
         if (!dateStr) return false;
         const today = new Date();
-        return dateStr === format(today, 'yyyy-MM-dd') && today.getHours() >= 12;
+        return dateStr === format(today, 'yyyy-MM-dd') && today.getHours() >= SECOND_HALF_HOUR;
     };
-    const isAfternoonStart = isAfternoon(formData.fromDate);
-    const isAfternoonEnd = isAfternoon(formData.toDate);
+    const isAfternoonStart = isAfterSecondHalf(formData.fromDate);
+    const isAfternoonEnd = isAfterSecondHalf(formData.toDate);
+
+    // Determine leave type restrictions
+    const getLeaveTypeRestrictions = () => {
+        if (!formData.leaveTypeId || !leaveTypes.length) return { minDate: '', maxDate: '', info: null };
+        const type = leaveTypes.find(t => t.id === formData.leaveTypeId);
+        if (!type) return { minDate: '', maxDate: '', info: null };
+        const typeName = type.name.toLowerCase();
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        if (typeName.includes('sick') || typeName === 'sl') {
+            return { minDate: todayStr, maxDate: todayStr, info: '🤒 Sick Leave can only be applied for today.' };
+        }
+        if (typeName.includes('casual') || typeName === 'cl') {
+            return { minDate: todayStr, maxDate: '', info: '📅 Casual Leave can only be applied for today or future dates.' };
+        }
+        // PL: any date
+        return { minDate: '', maxDate: '', info: '🏖️ Privilege Leave can be applied for any date (past, present, or future).' };
+    };
+    const leaveRestrictions = getLeaveTypeRestrictions();
+
+    // Client-side date validation before submit
+    const validateLeaveDates = () => {
+        if (!formData.leaveTypeId || !formData.fromDate || !formData.toDate) return null;
+        const type = leaveTypes.find(t => t.id === formData.leaveTypeId);
+        if (!type) return null;
+        const typeName = type.name.toLowerCase();
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+        if (typeName.includes('sick') || typeName === 'sl') {
+            if (formData.fromDate !== todayStr || formData.toDate !== todayStr) {
+                return 'Sick Leave can only be applied for today.';
+            }
+        } else if (typeName.includes('casual') || typeName === 'cl') {
+            if (formData.fromDate < todayStr) {
+                return 'Casual Leave cannot be applied for past dates.';
+            }
+        }
+        return null;
+    };
 
     useEffect(() => {
         if (isAfternoonStart && formData.sessionFrom !== 'SESSION_2')
@@ -96,6 +137,14 @@ const EmployeeLeaves = () => {
 
     const handleApplyLeave = async (e) => {
         e.preventDefault();
+
+        // Client-side validation per leave type
+        const dateError = validateLeaveDates();
+        if (dateError) {
+            toast.error(dateError);
+            return;
+        }
+
         setApplyLoading(true);
         try {
             await api.post('employee/leaves/apply', formData);
@@ -294,6 +343,7 @@ const EmployeeLeaves = () => {
                                                                 <TextField fullWidth type="date" label="From Date" name="fromDate"
                                                                     value={formData.fromDate} onChange={handleInputChange}
                                                                     InputLabelProps={{ shrink: true }} required
+                                                                    inputProps={{ min: leaveRestrictions.minDate || undefined, max: leaveRestrictions.maxDate || undefined }}
                                                                     sx={{ mb: 2, '& .MuiOutlinedInput-root': { borderRadius: 2, bgcolor: 'background.paper' } }} />
 
                                                                 <Typography variant="caption" fontWeight={600} color="text.secondary" mb={0.5} display="block">
@@ -312,7 +362,12 @@ const EmployeeLeaves = () => {
                                                                 </ToggleButtonGroup>
                                                                 {isAfternoonStart && (
                                                                     <Typography variant="caption" color="error" mt={0.8} display="block" fontWeight={500}>
-                                                                        ⚠️ Afternoon started. Automatically set to Second Half.
+                                                                        ⚠️ Second half already started. Automatically set to Second Half.
+                                                                    </Typography>
+                                                                )}
+                                                                {leaveRestrictions.info && !isAfternoonStart && (
+                                                                    <Typography variant="caption" color="text.secondary" mt={0.8} display="block" fontWeight={500} sx={{ color: '#6366f1' }}>
+                                                                        {leaveRestrictions.info}
                                                                     </Typography>
                                                                 )}
                                                             </Card>
@@ -327,6 +382,7 @@ const EmployeeLeaves = () => {
                                                                 <TextField fullWidth type="date" label="To Date" name="toDate"
                                                                     value={formData.toDate} onChange={handleInputChange}
                                                                     InputLabelProps={{ shrink: true }} required
+                                                                    inputProps={{ min: formData.fromDate || leaveRestrictions.minDate || undefined, max: leaveRestrictions.maxDate || undefined }}
                                                                     sx={{ mb: 2, '& .MuiOutlinedInput-root': { borderRadius: 2, bgcolor: 'background.paper' } }} />
 
                                                                 <Typography variant="caption" fontWeight={600} color="text.secondary" mb={0.5} display="block">

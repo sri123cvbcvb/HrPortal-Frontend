@@ -30,18 +30,53 @@ const greet = () => {
 const fmtTime = (t) => t ? t.substring(0, 5) : '—';
 const fmtDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 
-const calcHours = (inTime, outTime) => {
-    if (!inTime) return '—';
-    const [inH, inM] = inTime.split(':').map(Number);
-    let outH, outM;
-    if (outTime) {
-        [outH, outM] = outTime.split(':').map(Number);
+const calcDiffMins = (start, end) => {
+    if (!start) return 0;
+    const [sH, sM] = start.split(':').map(Number);
+    let eH, eM;
+    if (end) {
+        [eH, eM] = end.split(':').map(Number);
     } else {
         const now = new Date();
-        outH = now.getHours();
-        outM = now.getMinutes();
+        eH = now.getHours();
+        eM = now.getMinutes();
     }
-    const totalMins = (outH * 60 + outM) - (inH * 60 + inM);
+    const diff = (eH * 60 + eM) - (sH * 60 + sM);
+    return diff > 0 ? diff : 0;
+};
+
+const calcHours = (inTime, outTime, firstOutTime, secondInTime) => {
+    if (!inTime) return '—';
+    const parseMins = (t) => {
+        if (!t) return null;
+        const [h, m] = t.split(':').map(Number);
+        return h * 60 + m;
+    };
+
+    const now = new Date();
+    const currentMins = now.getHours() * 60 + now.getMinutes();
+    let totalMins = 0;
+
+    if (firstOutTime && secondInTime) {
+        // Multi-session (1st half worked + 2nd half worked)
+        const s1In = parseMins(inTime);
+        const s1Out = parseMins(firstOutTime);
+        if (s1In !== null && s1Out !== null && s1Out > s1In) {
+            totalMins += (s1Out - s1In);
+        }
+        const s2In = parseMins(secondInTime);
+        const s2Out = outTime ? parseMins(outTime) : currentMins;
+        if (s2In !== null && s2Out !== null && s2Out > s2In) {
+            totalMins += (s2Out - s2In);
+        }
+    } else {
+        const startMins = parseMins(inTime);
+        const endMins = outTime ? parseMins(outTime) : currentMins;
+        if (startMins !== null && endMins !== null && endMins > startMins) {
+            totalMins = endMins - startMins;
+        }
+    }
+
     if (totalMins <= 0) return '—';
     const h = Math.floor(totalMins / 60);
     const m = totalMins % 60;
@@ -50,6 +85,14 @@ const calcHours = (inTime, outTime) => {
 
 const getStatusInfo = (r) => {
     const s = (r.status || '').toUpperCase();
+    if (s.includes('HALF') || s === 'HP' || s === 'HD') {
+        let label = 'Half Day Present';
+        if (r.leaveNote) {
+            if (r.leaveNote.includes('SESSION_1')) label = 'Half Day (1st Half Leave)';
+            else if (r.leaveNote.includes('SESSION_2')) label = 'Half Day (2nd Half Leave)';
+        }
+        return { label, color: '#10b981', bg: '#ecfdf5', dot: '#10b981' };
+    }
     if (s === 'P' || s === 'PRESENT' || (r.checkInTime && s !== 'ABSENT' && s !== 'A')) {
         return { label: 'Present', color: '#10b981', bg: '#ecfdf5', dot: '#10b981' };
     }
@@ -57,7 +100,8 @@ const getStatusInfo = (r) => {
         return { label: 'Holiday', color: '#7c3aed', bg: '#ede9fe', dot: '#6366f1' };
     }
     if (s === 'L' || s === 'LEAVE' || s === 'SL' || s === 'CL' || s === 'PL') {
-        return { label: 'Leave', color: '#f59e0b', bg: '#fffbeb', dot: '#f59e0b' };
+        const leaveMap = { SL: 'Sick Leave', CL: 'Casual Leave', PL: 'Privilege Leave' };
+        return { label: leaveMap[s] || 'Leave', color: '#f59e0b', bg: '#fffbeb', dot: '#f59e0b' };
     }
     return { label: 'Absent', color: '#ef4444', bg: '#fef2f2', dot: '#ef4444' };
 };
@@ -108,13 +152,19 @@ const EmployeeHome = () => {
     const [summary, setSummary] = useState(null);
     const [holidays, setHolidays] = useState([]);
     const [clock, setClock] = useState(new Date());
+    const [todayStatus, setTodayStatus] = useState(null);
 
     useEffect(() => {
         fetchRecords();
         fetchSummary();
         fetchHolidays();
+        fetchTodayStatus();
         const timer = setInterval(() => setClock(new Date()), 1000);
-        return () => clearInterval(timer);
+        const statusPoll = setInterval(fetchTodayStatus, 15000);
+        return () => {
+            clearInterval(timer);
+            clearInterval(statusPoll);
+        };
     }, []);
 
     const fetchRecords = async () => {
@@ -125,6 +175,9 @@ const EmployeeHome = () => {
     };
     const fetchHolidays = async () => {
         try { const r = await api.get('/employee/leaves/upcoming'); setHolidays(r.data.slice(0, 4)); } catch {}
+    };
+    const fetchTodayStatus = async () => {
+        try { const r = await api.get('/attendance/today-status'); setTodayStatus(r.data); } catch {}
     };
 
     const getLocation = () => new Promise((res, rej) =>
@@ -141,7 +194,9 @@ const EmployeeHome = () => {
                 { latitude: pos.coords.latitude, longitude: pos.coords.longitude, deviceName: navigator.userAgent }
             );
             toast.success(res.data.message);
-            fetchRecords(); fetchSummary();
+            fetchRecords();
+            fetchSummary();
+            fetchTodayStatus();
         } catch (err) {
             if (err instanceof GeolocationPositionError)
                 toast.error('Location access denied. Please allow location access.');
@@ -151,19 +206,52 @@ const EmployeeHome = () => {
     };
 
     const todayStr = NOW.toISOString().split('T')[0];
-    const todayRecord = records.find(r => r.date === todayStr);
+    const rawTodayRecord = records.find(r => r.date === todayStr);
+    const leaveSession = todayStatus?.leaveSession || null;
+
+    const resolveMultiSession = (r, isToday = false) => {
+        if (!r) return null;
+        const isSession1 = r.leaveNote?.includes('SESSION_1') || (isToday && leaveSession === 'SESSION_1');
+        const hasCrossShiftTimes = r.checkInTime && r.checkInTime < '13:00' && r.checkOutTime && r.checkOutTime > '13:00';
+        const firstOut = r.firstCheckOutTime || (isSession1 && hasCrossShiftTimes ? '13:00:00' : null);
+        const secondIn = r.secondCheckInTime || (isSession1 && hasCrossShiftTimes ? '13:00:00' : null);
+        return { ...r, firstCheckOutTime: firstOut, secondCheckInTime: secondIn };
+    };
+
+    const todayRecord = resolveMultiSession(rawTodayRecord, true);
     const isCheckedIn = !!todayRecord;
     const isCheckedOut = isCheckedIn && !!todayRecord.checkOutTime;
     const { text: greeting, emoji } = greet();
 
+    // Use backend today-status for gating buttons (authoritative source for leave logic)
+    const canCheckIn = todayStatus ? todayStatus.canCheckIn : !isCheckedIn;
+    const canCheckOut = todayStatus ? todayStatus.canCheckOut : (isCheckedIn && !isCheckedOut);
+    const checkInBlockReason = todayStatus?.reason || null;
+    const nextAvailableAt = todayStatus?.nextAvailableAt || null;
+
     const workingPct = summary ? Math.round((summary.presentDays / Math.max(summary.totalDays, 1)) * 100) : 0;
-    const recentRecords = [...records].sort((a, b) => new Date(b.date + 'T00:00:00') - new Date(a.date + 'T00:00:00')).slice(0, 5);
+    const recentRecords = [...records]
+        .map(r => resolveMultiSession(r, r.date === todayStr))
+        .sort((a, b) => new Date(b.date + 'T00:00:00') - new Date(a.date + 'T00:00:00'))
+        .slice(0, 5);
 
     const statusInfo = isCheckedOut
-        ? { label: 'Completed', color: '#10b981', bg: '#ecfdf5' }
+        ? (leaveSession === 'SESSION_1' || todayRecord?.leaveNote?.includes('SESSION_1')
+            ? (canCheckIn
+                ? { label: '1st Half Leave (2nd Half Ready)', color: '#2563eb', bg: '#eff6ff' }
+                : { label: 'Half Day (1st Half Leave)', color: '#7c3aed', bg: '#f5f3ff' })
+            : leaveSession === 'SESSION_2' || todayRecord?.leaveNote?.includes('SESSION_2')
+                ? { label: 'Half Day (2nd Half Leave)', color: '#7c3aed', bg: '#f5f3ff' }
+                : { label: 'Completed', color: '#10b981', bg: '#ecfdf5' })
         : isCheckedIn
             ? { label: 'Working', color: '#f59e0b', bg: '#fffbeb' }
-            : { label: 'Not Checked In', color: '#94a3b8', bg: '#f8fafc' };
+            : leaveSession === 'FULL_DAY'
+                ? { label: 'On Leave', color: '#7c3aed', bg: '#f5f3ff' }
+                : leaveSession === 'SESSION_1'
+                    ? { label: 'First Half Leave', color: '#6366f1', bg: '#eef2ff' }
+                    : leaveSession === 'SESSION_2'
+                        ? { label: 'Second Half Leave', color: '#6366f1', bg: '#eef2ff' }
+                        : { label: 'Not Checked In', color: '#94a3b8', bg: '#f8fafc' };
 
     return (
         <Box sx={{ maxWidth: 1100, mx: 'auto', pb: 6 }}>
@@ -216,66 +304,147 @@ const EmployeeHome = () => {
                     mt: 3, p: 2, borderRadius: 3,
                     bgcolor: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)',
                     border: '1px solid rgba(255,255,255,0.2)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    flexWrap: 'wrap', gap: 2
+                    display: 'flex', flexDirection: 'column', gap: 1.5
                 }}>
-                    <Box display="flex" gap={3} alignItems="center">
-                        <Box>
-                            <Typography variant="caption" sx={{ opacity: 0.7 }}>Check In</Typography>
-                            <Typography fontWeight={800} variant="h6">
-                                {isCheckedIn ? fmtTime(todayRecord.checkInTime) : '—'}
-                            </Typography>
-                        </Box>
-                        <Box sx={{ width: '1px', height: 28, bgcolor: 'rgba(255,255,255,0.25)' }} />
-                        <Box>
-                            <Typography variant="caption" sx={{ opacity: 0.7 }}>Check Out</Typography>
-                            <Typography fontWeight={800} variant="h6">
-                                {isCheckedOut ? fmtTime(todayRecord.checkOutTime) : '—'}
-                            </Typography>
-                        </Box>
-                        {isCheckedIn && (
-                            <>
-                                <Box sx={{ width: '1px', height: 28, bgcolor: 'rgba(255,255,255,0.25)' }} />
-                                <Box>
-                                    <Typography variant="caption" sx={{ opacity: 0.7 }}>Hours</Typography>
-                                    <Typography fontWeight={800} variant="h6">
-                                        {calcHours(todayRecord.checkInTime, todayRecord.checkOutTime)}
+                    <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
+                        <Box display="flex" gap={3} alignItems="center">
+                            <Box>
+                                <Typography variant="caption" sx={{ opacity: 0.7 }}>Check In</Typography>
+                                <Typography fontWeight={800} variant="h6">
+                                    {isCheckedIn ? fmtTime(todayRecord.checkInTime) : '—'}
+                                </Typography>
+                                {todayRecord?.secondCheckInTime && (
+                                    <Typography variant="caption" sx={{ opacity: 0.9, fontSize: '0.68rem', display: 'block', color: '#93c5fd', fontWeight: 600 }}>
+                                        S2: {fmtTime(todayRecord.secondCheckInTime)}
                                     </Typography>
+                                )}
+                            </Box>
+                            <Box sx={{ width: '1px', height: 36, bgcolor: 'rgba(255,255,255,0.25)' }} />
+                            <Box>
+                                <Typography variant="caption" sx={{ opacity: 0.7 }}>Check Out</Typography>
+                                <Typography fontWeight={800} variant="h6">
+                                    {isCheckedOut ? fmtTime(todayRecord.checkOutTime) : (todayRecord?.firstCheckOutTime ? fmtTime(todayRecord.firstCheckOutTime) : '—')}
+                                </Typography>
+                                {todayRecord?.firstCheckOutTime && todayRecord?.secondCheckInTime && (
+                                    <Typography variant="caption" sx={{ opacity: 0.9, fontSize: '0.68rem', display: 'block', color: '#fca5a5', fontWeight: 600 }}>
+                                        S1: {fmtTime(todayRecord.firstCheckOutTime)}
+                                    </Typography>
+                                )}
+                            </Box>
+                            {isCheckedIn && (
+                                <>
+                                    <Box sx={{ width: '1px', height: 36, bgcolor: 'rgba(255,255,255,0.25)' }} />
+                                    <Box>
+                                        <Typography variant="caption" sx={{ opacity: 0.7 }}>Hours</Typography>
+                                        <Typography fontWeight={800} variant="h6">
+                                            {calcHours(
+                                                todayRecord.checkInTime,
+                                                todayRecord.checkOutTime,
+                                                todayRecord.firstCheckOutTime,
+                                                todayRecord.secondCheckInTime
+                                            )}
+                                        </Typography>
+                                        {todayRecord?.firstCheckOutTime && todayRecord?.secondCheckInTime && (
+                                            <Typography variant="caption" sx={{ opacity: 0.95, fontSize: '0.68rem', display: 'block', color: '#86efac', fontWeight: 600 }}>
+                                                {calcDiffMins(todayRecord.checkInTime, todayRecord.firstCheckOutTime)}m + {calcDiffMins(todayRecord.secondCheckInTime, todayRecord.checkOutTime)}m
+                                            </Typography>
+                                        )}
+                                    </Box>
+                                </>
+                            )}
+                        </Box>
+
+                        <Box display="flex" gap={1.5}>
+                            <Box display="flex" flexDirection="column" gap={0.5}>
+                                <Box display="flex" gap={1.5}>
+                                    <Button
+                                        variant="contained"
+                                        disabled={loading || !canCheckIn}
+                                        onClick={() => handleAttendance('checkin')}
+                                        startIcon={loading && !isCheckedIn ? <CircularProgress size={16} color="inherit" /> : <LoginIcon />}
+                                        sx={{
+                                            bgcolor: 'white', color: '#2563eb', fontWeight: 700,
+                                            borderRadius: 2.5, px: 3,
+                                            '&:hover': { bgcolor: '#f0f4ff' },
+                                            '&:disabled': { bgcolor: 'rgba(255,255,255,0.3)', color: 'rgba(255,255,255,0.6)' }
+                                        }}
+                                    >
+                                        Check In
+                                    </Button>
+                                    <Button
+                                        variant="outlined"
+                                        disabled={loading || !canCheckOut}
+                                        onClick={() => handleAttendance('checkout')}
+                                        startIcon={loading && isCheckedIn && !isCheckedOut ? <CircularProgress size={16} color="inherit" /> : <LogoutIcon />}
+                                        sx={{
+                                            borderColor: 'rgba(255,255,255,0.6)', color: 'white', fontWeight: 700,
+                                            borderRadius: 2.5, px: 3,
+                                            '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' },
+                                            '&:disabled': { borderColor: 'rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.4)' }
+                                        }}
+                                    >
+                                        Check Out
+                                    </Button>
                                 </Box>
-                            </>
-                        )}
+                                {/* Leave gating hint messages */}
+                                {!canCheckIn && checkInBlockReason && (!isCheckedIn || isCheckedOut) && (
+                                    <Typography variant="caption" sx={{ opacity: 0.85, color: '#fde68a', fontWeight: 500 }}>
+                                        {nextAvailableAt
+                                            ? `⏰ Check-in available from ${nextAvailableAt}`
+                                            : `ℹ️ ${checkInBlockReason}`}
+                                    </Typography>
+                                )}
+                                {canCheckIn && isCheckedOut && leaveSession === 'SESSION_1' && (
+                                    <Typography variant="caption" sx={{ opacity: 0.95, color: '#86efac', fontWeight: 600 }}>
+                                        🟢 2nd half shift is active. Click Check In to record attendance.
+                                    </Typography>
+                                )}
+                            </Box>
+                        </Box>
                     </Box>
 
-                    <Box display="flex" gap={1.5}>
-                        <Button
-                            variant="contained"
-                            disabled={loading || isCheckedIn}
-                            onClick={() => handleAttendance('checkin')}
-                            startIcon={loading && !isCheckedIn ? <CircularProgress size={16} color="inherit" /> : <LoginIcon />}
-                            sx={{
-                                bgcolor: 'white', color: '#2563eb', fontWeight: 700,
-                                borderRadius: 2.5, px: 3,
-                                '&:hover': { bgcolor: '#f0f4ff' },
-                                '&:disabled': { bgcolor: 'rgba(255,255,255,0.3)', color: 'rgba(255,255,255,0.6)' }
-                            }}
-                        >
-                            Check In
-                        </Button>
-                        <Button
-                            variant="outlined"
-                            disabled={loading || !isCheckedIn || isCheckedOut}
-                            onClick={() => handleAttendance('checkout')}
-                            startIcon={loading && isCheckedIn && !isCheckedOut ? <CircularProgress size={16} color="inherit" /> : <LogoutIcon />}
-                            sx={{
-                                borderColor: 'rgba(255,255,255,0.6)', color: 'white', fontWeight: 700,
-                                borderRadius: 2.5, px: 3,
-                                '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' },
-                                '&:disabled': { borderColor: 'rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.4)' }
-                            }}
-                        >
-                            Check Out
-                        </Button>
-                    </Box>
+                    {/* Multi-session pill banner */}
+                    {todayRecord?.firstCheckOutTime && todayRecord?.secondCheckInTime && (
+                        <Box sx={{
+                            pt: 1.2,
+                            borderTop: '1px solid rgba(255,255,255,0.15)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1.5,
+                            flexWrap: 'wrap'
+                        }}>
+                            <Typography variant="caption" sx={{ opacity: 0.8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.68rem' }}>
+                                Shift Sessions:
+                            </Typography>
+                            <Box sx={{
+                                px: 1.2, py: 0.4, borderRadius: 1.5,
+                                bgcolor: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)',
+                                display: 'flex', alignItems: 'center', gap: 0.8
+                            }}>
+                                <Typography variant="caption" sx={{ color: '#bfdbfe', fontWeight: 700, fontSize: '0.72rem' }}>
+                                    1st Session:
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: 'white', fontWeight: 600, fontSize: '0.72rem' }}>
+                                    {fmtTime(todayRecord.checkInTime)} – {fmtTime(todayRecord.firstCheckOutTime)} ({calcDiffMins(todayRecord.checkInTime, todayRecord.firstCheckOutTime)}m)
+                                </Typography>
+                            </Box>
+                            <Box sx={{
+                                px: 1.2, py: 0.4, borderRadius: 1.5,
+                                bgcolor: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)',
+                                display: 'flex', alignItems: 'center', gap: 0.8
+                            }}>
+                                <Typography variant="caption" sx={{ color: '#86efac', fontWeight: 700, fontSize: '0.72rem' }}>
+                                    2nd Session:
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: 'white', fontWeight: 600, fontSize: '0.72rem' }}>
+                                    {fmtTime(todayRecord.secondCheckInTime)} – {todayRecord.checkOutTime ? fmtTime(todayRecord.checkOutTime) : 'Active'} ({calcDiffMins(todayRecord.secondCheckInTime, todayRecord.checkOutTime)}m)
+                                </Typography>
+                            </Box>
+                            <Typography variant="caption" sx={{ opacity: 0.85, color: '#fef08a', fontWeight: 700, fontSize: '0.72rem', ml: { xs: 0, sm: 'auto' } }}>
+                                Total Working: {calcDiffMins(todayRecord.checkInTime, todayRecord.firstCheckOutTime) + calcDiffMins(todayRecord.secondCheckInTime, todayRecord.checkOutTime)} mins
+                            </Typography>
+                        </Box>
+                    )}
                 </Box>
             </Box>
 
@@ -316,8 +485,12 @@ const EmployeeHome = () => {
                         }}
                     />
                     <Box display="flex" justifyContent="space-between" mt={1.5}>
-                        <Typography variant="caption" color="text.disabled">0 days</Typography>
-                        <Typography variant="caption" color="text.disabled">{summary?.totalDays ?? 0} working days</Typography>
+                        <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                            {summary?.presentDays ?? 0} days
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                            {summary?.totalDays ?? 0} working days
+                        </Typography>
                     </Box>
 
                     {/* Recent Records */}
@@ -343,7 +516,13 @@ const EmployeeHome = () => {
                                     <Box display="flex" gap={2} alignItems="center">
                                         <Typography variant="caption" color="text.secondary">
                                             <AccessTimeIcon sx={{ fontSize: 12, mr: 0.3, verticalAlign: 'middle' }} />
-                                            {fmtTime(r.checkInTime)} → {fmtTime(r.checkOutTime)}
+                                            {r.firstCheckOutTime && r.secondCheckInTime ? (
+                                                <span>
+                                                    {fmtTime(r.checkInTime)}–{fmtTime(r.firstCheckOutTime)} &amp; {fmtTime(r.secondCheckInTime)}–{fmtTime(r.checkOutTime || '—')}
+                                                </span>
+                                            ) : (
+                                                <span>{fmtTime(r.checkInTime)} → {fmtTime(r.checkOutTime)}</span>
+                                            )}
                                         </Typography>
                                         <Chip size="small" label={info.label} sx={{
                                             height: 20, fontSize: '0.65rem', fontWeight: 700,
