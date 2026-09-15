@@ -91,6 +91,7 @@ const Login = () => {
                             >
                                 {loading ? 'Signing in...' : 'Sign In'}
                             </Button>
+                            {/* Signup hidden - admin creates employee accounts and provides credentials
                             <Box sx={{ textAlign: 'center', mt: 1 }}>
                                 <Typography variant="body2">
                                     Don't have an account?{' '}
@@ -99,6 +100,7 @@ const Login = () => {
                                     </Link>
                                 </Typography>
                             </Box>
+                            */}
                         </Box>
                     </CardContent>
                 </Card>

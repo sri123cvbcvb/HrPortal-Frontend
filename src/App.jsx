@@ -19,7 +19,8 @@ function App() {
           <Layout>
             <Routes>
               <Route path="/login" element={<Login />} />
-              <Route path="/signup" element={<Signup />} />
+              {/* Signup route hidden - redirects to login. Re-enable <Signup /> if needed later */}
+              <Route path="/signup" element={<Navigate to="/login" replace />} />
 
               {/* Protected Admin Routes */}
               <Route element={<PrivateRoute requiredRole="ROLE_ADMIN" />}>
