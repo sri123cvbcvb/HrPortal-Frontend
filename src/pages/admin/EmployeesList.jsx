@@ -18,6 +18,8 @@ import PaymentsIcon from '@mui/icons-material/Payments';
 import CloseIcon from '@mui/icons-material/Close';
 import SearchIcon from '@mui/icons-material/Search';
 import GroupIcon from '@mui/icons-material/Group';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import api from '../../utils/api';
 
@@ -122,6 +124,7 @@ const ThCell = ({ children, align }) => (
 );
 
 const EmployeesList = () => {
+    const navigate = useNavigate();
     const [employees, setEmployees] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -524,6 +527,12 @@ const EmployeesList = () => {
                                                 </TableCell>
                                                 <TableCell align="right">
                                                     <Box display="flex" justifyContent="flex-end" gap={0.5}>
+                                                        <Tooltip title="View Payslips">
+                                                            <IconButton size="small" onClick={() => navigate(`/admin/payroll?employeeId=${emp.id}`)}
+                                                                sx={{ bgcolor: '#f5f3ff', color: '#7c3aed', '&:hover': { bgcolor: '#ddd6fe' }, width: 28, height: 28 }}>
+                                                                <ReceiptLongIcon sx={{ fontSize: 14 }} />
+                                                            </IconButton>
+                                                        </Tooltip>
                                                         <Tooltip title="View Details">
                                                             <IconButton size="small" onClick={() => setViewEmployee(emp)}
                                                                 sx={{ bgcolor: '#eef2ff', color: '#6366f1', '&:hover': { bgcolor: '#c7d2fe' }, width: 28, height: 28 }}>
