@@ -12,12 +12,14 @@ import MenuIcon from '@mui/icons-material/Menu';
 import LogoutIcon from '@mui/icons-material/Logout';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import { AuthContext } from '../context/AuthContext';
 
 import AdminOverview from './admin/AdminOverview';
 import EmployeesList from './admin/EmployeesList';
 import AdminLeaveRequests from './admin/AdminLeaveRequests';
 import LeaveManagement from './admin/LeaveManagement';
+import AdminPayroll from './admin/AdminPayroll';
 
 const DRAWER_WIDTH = 272;
 
@@ -35,6 +37,12 @@ const menuItems = [
         icon: <PeopleIcon fontSize="small" />,
         path: '/admin/employees',
         description: 'Manage team'
+    },
+    {
+        text: 'Payslips & Payroll',
+        icon: <ReceiptLongIcon fontSize="small" />,
+        path: '/admin/payroll',
+        description: 'Employee payslips & preview'
     },
     {
         text: 'Leave Requests',
@@ -347,6 +355,7 @@ const AdminDashboard = () => {
                 <Routes>
                     <Route index element={<AdminOverview />} />
                     <Route path="employees" element={<EmployeesList />} />
+                    <Route path="payroll" element={<AdminPayroll />} />
                     <Route path="leaves" element={<AdminLeaveRequests />} />
                     <Route path="holidays" element={<LeaveManagement />} />
                 </Routes>
