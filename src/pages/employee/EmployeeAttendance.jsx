@@ -20,20 +20,23 @@ import { format, startOfMonth, parse } from 'date-fns';
 
 // ── Status Config ─────────────────────────────────────────────
 const STATUS_CONFIG = {
-    P:  { label: 'Present',         bg: '#ecfdf5', color: '#059669', border: '#a7f3d0' },
-    A:  { label: 'Absent',          bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
-    SL: { label: 'Sick Leave',      bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
-    CL: { label: 'Casual Leave',    bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
-    PL: { label: 'Privilege Leave', bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
-    L:  { label: 'Leave',           bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
-    H:  { label: 'Holiday',         bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
-    O:  { label: 'Weekly Off',      bg: '#f8fafc', color: '#94a3b8', border: '#e2e8f0' },
+    P:  { label: 'Present',          bg: '#ecfdf5', color: '#059669', border: '#a7f3d0' },
+    HP: { label: 'Half Day Present', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+    HD: { label: 'Half Day Present', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+    A:  { label: 'Absent',           bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+    SL: { label: 'Sick Leave',       bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
+    CL: { label: 'Casual Leave',     bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
+    PL: { label: 'Privilege Leave',  bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
+    L:  { label: 'Leave',            bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
+    H:  { label: 'Holiday',          bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
+    O:  { label: 'Weekly Off',       bg: '#f8fafc', color: '#94a3b8', border: '#e2e8f0' },
 };
 
 const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const LEGEND = [
     { code: 'P', ...STATUS_CONFIG['P'] },
+    { code: 'HP', ...STATUS_CONFIG['HP'] },
     { code: 'A', ...STATUS_CONFIG['A'] },
     { code: 'L', ...STATUS_CONFIG['SL'], label: 'Leave' },
     { code: 'H', ...STATUS_CONFIG['H'] },
@@ -69,7 +72,7 @@ const CalendarCell = ({ dayData, isToday }) => {
         return <Box sx={{ minHeight: 80, borderRadius: 2, bgcolor: '#fafafa' }} />;
     }
 
-    const { date, status, shift, signInTime, signOutTime } = dayData;
+    const { date, status, shift, signInTime, signOutTime, leaveSession, leaveType, leaveNote } = dayData;
     const cfg = status ? STATUS_CONFIG[status] : null;
     const dayNum = new Date(date + 'T00:00:00').getDate();
 
@@ -79,6 +82,17 @@ const CalendarCell = ({ dayData, isToday }) => {
                 {format(new Date(date + 'T00:00:00'), 'dd MMM yyyy')}
             </Typography>
             <Typography variant="caption" display="block">Status: {cfg ? cfg.label : '—'}</Typography>
+            {leaveSession && (
+                <Typography variant="caption" display="block" sx={{ color: '#7c3aed', fontWeight: 600 }}>
+                    Leave: {leaveSession === 'SESSION_1' ? 'First Half' : leaveSession === 'SESSION_2' ? 'Second Half' : 'Full Day'}
+                    {leaveType ? ` (${leaveType})` : ''}
+                </Typography>
+            )}
+            {leaveNote && (
+                <Typography variant="caption" display="block" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
+                    Note: {leaveNote}
+                </Typography>
+            )}
             {shift && <Typography variant="caption" display="block">Shift: {shift}</Typography>}
             {signInTime && <Typography variant="caption" display="block">In: {signInTime}</Typography>}
             {signOutTime && <Typography variant="caption" display="block">Out: {signOutTime}</Typography>}
@@ -116,6 +130,17 @@ const CalendarCell = ({ dayData, isToday }) => {
                 <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
                     {status === 'O' ? (
                         <TvIcon sx={{ fontSize: 18, color: cfg?.color }} />
+                    ) : (status === 'HP' || status === 'HD') ? (
+                        <Box textAlign="center">
+                            <Typography variant="body2" fontWeight={700} sx={{ color: cfg?.color, fontSize: '0.85rem', lineHeight: 1.1 }}>
+                                {status}
+                            </Typography>
+                            {leaveSession && (
+                                <Typography variant="caption" sx={{ fontSize: '0.58rem', fontWeight: 700, color: '#7c3aed', display: 'block', lineHeight: 1.1 }}>
+                                    {leaveSession === 'SESSION_1' ? '1st Half' : '2nd Half'} {leaveType || ''}
+                                </Typography>
+                            )}
+                        </Box>
                     ) : status ? (
                         <Typography variant="body2" fontWeight={700} sx={{ color: cfg?.color, fontSize: '0.85rem' }}>
                             {status}
@@ -338,13 +363,46 @@ const EmployeeAttendance = () => {
                             <TableBody>
                                 {detailRecords.length === 0 ? (
                                     <TableRow><TableCell colSpan={7} align="center" sx={{ py: 5, color: 'text.disabled' }}>No records for this month.</TableCell></TableRow>
-                                ) : detailRecords.map(rec => {
+                                ) : detailRecords.map(rawRec => {
+                                    const isSession1 = rawRec.leaveNote?.includes('SESSION_1');
+                                    const hasCrossShiftTimes = rawRec.checkInTime && rawRec.checkInTime < '13:00' && rawRec.checkOutTime && rawRec.checkOutTime > '13:00';
+                                    const effectiveFirstCheckOut = rawRec.firstCheckOutTime || (isSession1 && hasCrossShiftTimes ? '13:00:00' : null);
+                                    const effectiveSecondCheckIn = rawRec.secondCheckInTime || (isSession1 && hasCrossShiftTimes ? '13:00:00' : null);
+                                    const rec = { ...rawRec, firstCheckOutTime: effectiveFirstCheckOut, secondCheckInTime: effectiveSecondCheckIn };
+
                                     let workingHours = '—';
-                                    if (rec.checkInTime && rec.checkOutTime) {
-                                        const [inH, inM] = rec.checkInTime.split(':').map(Number);
-                                        const [outH, outM] = rec.checkOutTime.split(':').map(Number);
-                                        const totalMins = (outH * 60 + outM) - (inH * 60 + inM);
-                                        if (totalMins > 0) { const h = Math.floor(totalMins / 60); const m = totalMins % 60; workingHours = `${h}h ${m}m`; }
+                                    const parseMins = (t) => {
+                                        if (!t) return null;
+                                        const [h, m] = t.split(':').map(Number);
+                                        return h * 60 + m;
+                                    };
+                                    let totalMins = 0;
+                                    let s1Mins = 0;
+                                    let s2Mins = 0;
+                                    if (rec.firstCheckOutTime && rec.secondCheckInTime) {
+                                        const s1In = parseMins(rec.checkInTime);
+                                        const s1Out = parseMins(rec.firstCheckOutTime);
+                                        if (s1In !== null && s1Out !== null && s1Out > s1In) {
+                                            s1Mins = s1Out - s1In;
+                                            totalMins += s1Mins;
+                                        }
+                                        const s2In = parseMins(rec.secondCheckInTime);
+                                        const s2Out = parseMins(rec.checkOutTime);
+                                        if (s2In !== null && s2Out !== null && s2Out > s2In) {
+                                            s2Mins = s2Out - s2In;
+                                            totalMins += s2Mins;
+                                        }
+                                    } else if (rec.checkInTime && rec.checkOutTime) {
+                                        const inMins = parseMins(rec.checkInTime);
+                                        const outMins = parseMins(rec.checkOutTime);
+                                        if (inMins !== null && outMins !== null && outMins > inMins) {
+                                            totalMins = outMins - inMins;
+                                        }
+                                    }
+                                    if (totalMins > 0) {
+                                        const h = Math.floor(totalMins / 60);
+                                        const m = totalMins % 60;
+                                        workingHours = `${h}h ${m}m`;
                                     }
                                     const mapsUrl = (rec.latitude && rec.longitude) ? `https://www.google.com/maps?q=${rec.latitude},${rec.longitude}` : null;
 
@@ -357,26 +415,64 @@ const EmployeeAttendance = () => {
                                                 <Typography variant="body2" fontWeight={600} color="success.main">
                                                     {rec.checkInTime ? rec.checkInTime.substring(0, 5) : '—'}
                                                 </Typography>
+                                                {rec.secondCheckInTime && (
+                                                    <Tooltip title="Second Session Check-In">
+                                                        <Typography variant="caption" sx={{ color: '#2563eb', fontSize: '0.68rem', fontWeight: 600, display: 'block', mt: 0.2 }}>
+                                                            S2: {rec.secondCheckInTime.substring(0, 5)}
+                                                        </Typography>
+                                                    </Tooltip>
+                                                )}
                                             </TableCell>
                                             <TableCell>
                                                 <Typography variant="body2" fontWeight={600} color="error.main">
                                                     {rec.checkOutTime ? rec.checkOutTime.substring(0, 5) : '—'}
                                                 </Typography>
+                                                {rec.firstCheckOutTime && rec.secondCheckInTime && (
+                                                    <Tooltip title="First Session Auto-Checkout">
+                                                        <Typography variant="caption" sx={{ color: '#d97706', fontSize: '0.68rem', fontWeight: 600, display: 'block', mt: 0.2 }}>
+                                                            S1: {rec.firstCheckOutTime.substring(0, 5)}
+                                                        </Typography>
+                                                    </Tooltip>
+                                                )}
                                             </TableCell>
                                             <TableCell>
-                                                <Chip label={workingHours} size="small" sx={{
-                                                    height: 22, fontWeight: 700, fontSize: '0.7rem',
-                                                    bgcolor: workingHours !== '—' ? '#eff6ff' : '#f8fafc',
-                                                    color: workingHours !== '—' ? '#2563eb' : '#94a3b8',
-                                                }} />
+                                                <Box display="flex" flexDirection="column" gap={0.3}>
+                                                    <Chip label={workingHours} size="small" sx={{
+                                                        height: 22, fontWeight: 700, fontSize: '0.7rem',
+                                                        bgcolor: workingHours !== '—' ? '#eff6ff' : '#f8fafc',
+                                                        color: workingHours !== '—' ? '#2563eb' : '#94a3b8',
+                                                    }} />
+                                                    {rec.firstCheckOutTime && rec.secondCheckInTime && (
+                                                        <Tooltip title={`Session 1: ${rec.checkInTime?.substring(0, 5)}–${rec.firstCheckOutTime?.substring(0, 5)} (${s1Mins}m) | Session 2: ${rec.secondCheckInTime?.substring(0, 5)}–${rec.checkOutTime?.substring(0, 5) || 'Now'} (${s2Mins}m)`}>
+                                                            <Typography variant="caption" sx={{
+                                                                fontSize: '0.65rem',
+                                                                fontWeight: 700,
+                                                                color: '#059669',
+                                                                cursor: 'help',
+                                                                whiteSpace: 'nowrap'
+                                                            }}>
+                                                                {s1Mins}m + {s2Mins}m
+                                                            </Typography>
+                                                        </Tooltip>
+                                                    )}
+                                                </Box>
                                             </TableCell>
-                                            <TableCell>
-                                                <Chip label={rec.status} size="small" sx={{
-                                                    height: 22, fontWeight: 700, fontSize: '0.7rem',
-                                                    bgcolor: rec.status === 'Present' ? '#ecfdf5' : '#fef2f2',
-                                                    color: rec.status === 'Present' ? '#059669' : '#dc2626',
-                                                }} />
-                                            </TableCell>
+                                             <TableCell>
+                                                 <Box display="flex" flexDirection="column" gap={0.3}>
+                                                     <Chip label={rec.status} size="small" sx={{
+                                                         height: 22, fontWeight: 700, fontSize: '0.7rem',
+                                                         bgcolor: (rec.status && rec.status.toLowerCase().includes('present')) ? '#ecfdf5' : '#fef2f2',
+                                                         color: (rec.status && rec.status.toLowerCase().includes('present')) ? '#059669' : '#dc2626',
+                                                     }} />
+                                                     {rec.leaveNote && (
+                                                         <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#7c3aed', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                                             {rec.leaveNote.includes('SESSION_1') ? '1st Half Leave' :
+                                                              rec.leaveNote.includes('SESSION_2') ? '2nd Half Leave' :
+                                                              rec.leaveNote.length > 25 ? rec.leaveNote.substring(0, 25) + '...' : rec.leaveNote}
+                                                         </Typography>
+                                                     )}
+                                                 </Box>
+                                             </TableCell>
                                             <TableCell>
                                                 {rec.deviceName ? (
                                                     <Tooltip title={rec.deviceName}>
